@@ -1,0 +1,129 @@
+//@version=6
+indicator('Relative Strength Suite [BLC]', shorttitle = 'RS Suite [BLC]', overlay = false)
+
+// --- INPUTS ---
+group_main = 'General Settings'
+strength_type = input.string('Relative Strength', title = 'Strength Type', options = ['Relative Strength', 'Dorsey RS', 'Mansfield RS', 'Screener'], group = group_main, tooltip = 'Indicator on Chart: Choose Between Relative Strength, Dorsey RS, Mansfield RS. If you\'re using Pine Screener select Screener to see all 3.')
+comparison_symbol = input.symbol('SPX', title = 'Comparison Symbol', group = group_main)
+
+// --- Relative Strength Inputs ---
+group_flex_rs = '1. Relative Strength'
+lookback_period = input.int(55, title = 'Lookback for New High/Low', minval = 1, group = group_flex_rs, tooltip = 'Period used for new highs/lows to change line color (does not effect RS score)')
+ma_type = input.string('None', title = 'Moving Average Type', options = ['None', 'SMA', 'EMA', 'WMA', 'HMA'], group = group_flex_rs, tooltip = 'Select a type to display a moving average on the RS line. Default is \'None\' (Off).')
+smoothing_length = input.int(21, title = 'Moving Average Length', minval = 1, group = group_flex_rs)
+roc_length = input.int(14, title = 'ROC Length (for Composite RS)', minval = 1, group = group_flex_rs, tooltip = 'Lookback period for Rate of Change of the RS ratio')
+rolling_length = input.int(14, title = 'Rolling RS Length (for Composite RS)', minval = 1, group = group_flex_rs, tooltip = 'Lookback period for Rolling Relative Strength (return spread)')
+
+// --- Dorsey RS Inputs ---
+group_dorsey_rs = '2. Dorsey RS (Smoothed Trend)'
+show_dorsey_rs = input.bool(true, title = 'Show Dorsey RS Line', group = group_dorsey_rs, tooltip = 'Rising DRS indicates stock outperformance while declining DRS suggests underperformance, irrespective of stock price movement')
+
+// --- Mansfield RS Inputs ---
+group_mansfield_rs = '3. Mansfield RS (Performance Momentum)'
+show_mansfield_rs = input.bool(true, title = 'Show Mansfield RS Line', group = group_mansfield_rs, tooltip = 'Above zero indicates strength relative to the index, and below zero indicates weakness. It utilizes the raw price ratio in its calculation.')
+mansfield_period = input.int(200, title = 'Mansfield SMA Period', minval = 1, group = group_mansfield_rs)
+
+// --- FUNCTIONS ---
+f_get_ma(source, length, type) =>
+    ma = switch type
+        'SMA' => ta.sma(source, length)
+        'EMA' => ta.ema(source, length)
+        'WMA' => ta.wma(source, length)
+        'HMA' => ta.hma(source, length)
+        => na
+    ma
+
+// --- CALCULATIONS ---
+stock_close = close
+comparison_close = request.security(comparison_symbol, timeframe.period, close, lookahead = barmerge.lookahead_off)
+
+// === Composite RS (Z-Score Normalized) ===
+
+// Base RS ratio (unscaled)
+rs_ratio = stock_close / comparison_close
+
+// Rate of Change of RS
+rs_roc = ta.roc(rs_ratio, roc_length)
+
+// Rolling Relative Strength (return spread)
+stock_return = (stock_close - stock_close[rolling_length]) / stock_close[rolling_length]
+benchmark_return = (comparison_close - comparison_close[rolling_length]) / comparison_close[rolling_length]
+rolling_rs = stock_return - benchmark_return
+
+// Z-Score Normalization
+z_roc = (rs_roc - ta.sma(rs_roc, roc_length)) / ta.stdev(rs_roc, roc_length)
+z_rolling = (rolling_rs - ta.sma(rolling_rs, rolling_length)) / ta.stdev(rolling_rs, rolling_length)
+
+// Composite RS Score
+flex_rs_ratio = z_roc + z_rolling
+flex_rs_smoothed = f_get_ma(flex_rs_ratio, smoothing_length, ma_type)
+
+// === Dorsey RS ===
+dorsey_rs = stock_close / comparison_close * 100
+
+// === Mansfield RS ===
+mansfield_base = dorsey_rs // Use the 100-scaled RS
+mansfield_sma = ta.sma(mansfield_base, mansfield_period)
+mansfield_rs = mansfield_sma != 0 ? (mansfield_base / mansfield_sma - 1) * 100 : 0
+
+// --- SCREENER SIGNAL CALCULATIONS ---
+is_new_high = flex_rs_ratio > ta.highest(flex_rs_ratio[1], lookback_period)
+is_new_low = flex_rs_ratio < ta.lowest(flex_rs_ratio[1], lookback_period)
+screener_signal_primary = is_new_high ? 1 : is_new_low ? -1 : 0
+screener_signal_dorsey = dorsey_rs > dorsey_rs[1] ? 1 : dorsey_rs < dorsey_rs[1] ? -1 : 0
+screener_signal_mansfield_zone = mansfield_rs > 0 ? 1 : mansfield_rs < 0 ? -1 : 0
+
+// --- PLOTTING ---
+is_rs_view = strength_type == 'Relative Strength'
+is_dorsey_view = strength_type == 'Dorsey RS'
+is_mansfield_view = strength_type == 'Mansfield RS'
+is_screener_view = strength_type == 'Screener'
+
+var flex_line_color = color.new(color.gray, 50)
+if is_new_high
+    flex_line_color := color.new(color.green, 0)
+    flex_line_color
+else if is_new_low
+    flex_line_color := color.new(color.red, 0)
+    flex_line_color
+
+// --- PLOTS ---
+plot(is_rs_view ? flex_rs_ratio : na, title = 'Z-Score Normalize', color = flex_line_color, linewidth = 2)
+plot(is_rs_view ? flex_rs_smoothed : na, title = 'Moving Average', color = color.new(color.orange, 0), linewidth = 1)
+plot(is_dorsey_view and show_dorsey_rs ? dorsey_rs : na, title = 'Dorsey RS', color = color.new(color.blue, 0), linewidth = 2)
+plot(is_mansfield_view and show_mansfield_rs ? mansfield_rs : na, title = 'Mansfield RS', color = color.new(color.yellow, 0), linewidth = 2)
+
+plot(is_screener_view ? flex_rs_ratio : na, title = 'Relative Strength Screener', color = flex_line_color, linewidth = 2)
+plot(is_screener_view and show_dorsey_rs ? dorsey_rs : na, title = 'Dorsey RS Screener', color = color.new(color.blue, 0), linewidth = 2)
+plot(is_screener_view and show_mansfield_rs ? mansfield_rs : na, title = 'Mansfield RS Screener', color = color.new(color.yellow, 0), linewidth = 2)
+
+// --- LABELS ---
+var label rs_label = na
+var label dorsey_label = na
+var label mansfield_label = na
+
+if barstate.islast
+    if is_rs_view
+        if na(rs_label)
+            rs_label := label.new(bar_index, flex_rs_ratio, 'Relative Strength', style = label.style_label_left, color = color.new(color.gray, 100), textcolor = color.white)
+            rs_label
+        else
+            label.set_xy(rs_label, bar_index, flex_rs_ratio)
+    if is_dorsey_view and show_dorsey_rs
+        if na(dorsey_label)
+            dorsey_label := label.new(bar_index, dorsey_rs, 'Dorsey RS', style = label.style_label_left, color = color.new(color.blue, 100), textcolor = color.white)
+            dorsey_label
+        else
+            label.set_xy(dorsey_label, bar_index, dorsey_rs)
+    if is_mansfield_view and show_mansfield_rs
+        if na(mansfield_label)
+            mansfield_label := label.new(bar_index, mansfield_rs, 'Mansfield RS', style = label.style_label_left, color = color.new(color.yellow, 100), textcolor = color.white)
+            mansfield_label
+        else
+            label.set_xy(mansfield_label, bar_index, mansfield_rs)
+
+
+// --- SCREENER OUTPUT ---
+plot(screener_signal_primary, title = 'New High Low Signal', display = display.data_window)
+plot(screener_signal_dorsey, title = 'Dorsey Trend Signal', display = display.data_window)
+plot(screener_signal_mansfield_zone, title = 'Mansfield Zone Signal', display = display.data_window)
