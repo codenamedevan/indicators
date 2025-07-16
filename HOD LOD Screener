@@ -1,0 +1,59 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Enhanced HOD LOD Screener 
+
+//@version=6
+indicator("Enhanced HOD / LOD Screener", shorttitle='HOD/LOD Screener', overlay = false)
+
+// Running HOD & LOD
+var float hod = na
+var float lod = na
+var float prevClose = na
+
+if barstate.isfirst or dayofmonth != dayofmonth[1]
+    hod       := high
+    lod       := low
+    prevClose := request.security(syminfo.tickerid, "D", close[1], lookahead = barmerge.lookahead_on)
+else
+    hod := math.max(hod, high)
+    lod := math.min(lod, low)
+
+// Flags
+newHigh = high >= hod
+newLow  = low  <= lod
+
+// Streak Counters
+var int streakUp = 0
+var int streakDn = 0
+
+if barstate.isconfirmed
+    if close >= hod
+        streakUp := streakUp + 1
+        streakDn := 0
+    else if close <= lod
+        streakDn := streakDn + 1
+        streakUp := 0
+    else
+        streakUp := 0
+        streakDn := 0
+
+// Percentage Above Below HOD LOD 
+pctBelowHOD   =  (hod - close) / hod * 100          // positive = below HOD
+pctAboveLOD   =  (close - lod) / lod * 100          // positive = above LOD
+pctFromPrevC  =  (close - prevClose) / prevClose * 100
+dailyRangePct =  (hod - lod) / lod * 100
+
+// Plot Columns for Pine Screener
+plot(newHigh ? 1 : 0, title = "New HOD",        linewidth = 1, color = color.lime)
+plot(newLow  ? 1 : 0, title = "New LOD",        linewidth = 1, color = color.red)
+plot(pctBelowHOD,      title = "% Below HOD",    linewidth = 1, color = color.orange)
+plot(pctAboveLOD,      title = "% Above LOD",    linewidth = 1, color = color.fuchsia)
+plot(pctFromPrevC,     title = "% From Prev C",  linewidth = 1, color = color.blue)
+plot(dailyRangePct,    title = "Daily Range %",  linewidth = 1, color = color.gray)
+plot(streakUp,         title = "Consec HOD",     linewidth = 1, color = color.green)
+plot(streakDn,         title = "Consec LOD",     linewidth = 1, color = color.maroon)
+
+// Alerts
+if newHigh
+    alert("New High of Day: " + str.tostring(hod), alert.freq_once_per_bar)
+if newLow
+    alert("New Low of Day:  " + str.tostring(lod), alert.freq_once_per_bar)
